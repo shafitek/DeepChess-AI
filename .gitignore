@@ -1,0 +1,6 @@
+__pycache__
+.vscode/
+dataset/*
+!dataset/.gitkeep
+models/checkpoints
+meta.json

@@ -1,0 +1,8 @@
+Engine 1: Stockfish
+-------------------
+File Name: stockfish_x64
+Original File Name: stockfish_20090216_x64_bmi2
+Date downloaded: 10/22/2020
+Notes: You might have to download a different version of the Stockfish engine
+       as you may have a different computer processor.
+
