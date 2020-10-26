@@ -139,65 +139,56 @@ def getBitBoard(board):
 
     return bitboard
 
+def makeDatasetByColor(pid, dataset_inst, color, max_to_gen, s_idx, end_idx, dataset_name):
 
-def makeDatasetByColor(DATASET_NPY, COLOR, dataset_inst):
+    global OFFSETS_WHITE
+    global OFFSETS_BLACK
 
-    positions_count = NUM_WHITE_POSITIONS if COLOR == 1 else NUM_BLACK_POSITIONS
-    games_count = positions_count/10
-    temp_data = np.empty((0, 773), dtype=np.bool)
+    OFFSET = OFFSETS_WHITE if color == 1 else OFFSETS_BLACK
+
+    DATASET_NPY = os.path.join(DATASET_DIR, dataset_name)
+    games_played = 0
     positions_computed = 0
+    
+    temp_data = np.empty((0, 773), dtype=np.bool)
 
-    while(games_count > 0):
-        if games_count % 5000 == 0:
+    while(positions_computed < max_to_gen and (s_idx+games_played) < end_idx):
+        if games_played % 5000 == 0:
             with open(DATASET_NPY, 'wb') as f:
                 np.save(f, temp_data, allow_pickle=False, fix_imports=False)
-            print("{}: [{} / {}]".format("WHITE" if COLOR == 1 else "BLACK", 
-                                         positions_computed, positions_count))
+            print(dataset_name, "{}: [{} / {}]".format("WHITE" if color == 1 else "BLACK",
+                                         positions_computed, max_to_gen))
 
-        offset = dataset_inst.tell()
-        current_game_headers = chess.pgn.read_headers(dataset_inst)
-        ply_cnt = int(current_game_headers['PlyCount'])
-
-        # 1 if white wins, 0 if black wins, 2 if its a draw
-        result = 1 if "1-0" in current_game_headers['Result'] else 0 if "0-1" in current_game_headers['Result'] else 2
-
-        if ply_cnt < 30 or result == 2 or result != COLOR:
-            continue
-
-        games_count -= 1
-
-        dataset_inst.seek(offset)
+        dataset_inst.seek(OFFSET[s_idx+games_played])
         current_game = chess.pgn.read_game(dataset_inst)
-        moves_mask = np.random.randint(2, size=ply_cnt)
+        ply_cnt = int(current_game.headers['PlyCount'])
+        moves_mask = np.asarray([0]*(ply_cnt-15)+[1]*15, dtype=np.bool)
+        np.random.shuffle(moves_mask[5:])
 
         board = current_game.board()
         idx = 0
         rec = 0
 
         for move in current_game.mainline_moves():
-            if idx < 5:
+            if rec >= 10:
+                break
+            if moves_mask[idx] == 0 or board.is_capture(move):
                 board.push(move)
-            else:
-                if rec >= 10:
-                    break
+                idx += 1
+                continue
 
-                if board.is_capture(move) or moves_mask[idx]:
-                    board.push(move)
-                    idx += 1
-                    continue
+            bitboard = getBitBoard(board)
+            temp_data = np.vstack((temp_data, bitboard))
+            positions_computed += 1
 
-                rec += 1
-                bitboard = getBitBoard(board)
-                temp_data = np.vstack((temp_data, bitboard))
-
-                board.push(move)
-
+            board.push(move)
+            rec += 1
             idx += 1
         
-        positions_computed += 10
-
-    print("{}: [{} / {}]".format("WHITE" if COLOR == 1 else "BLACK",
-                                 positions_computed, positions_count))
+        games_played += 1
+        
+    print(dataset_name, "{}: [{} / {}]".format("WHITE" if color == 1 else "BLACK",
+                                 positions_computed, max_to_gen))
 
     if (temp_data.shape[0] > 0):
         with open(DATASET_NPY, 'wb') as f:
@@ -206,59 +197,233 @@ def makeDatasetByColor(DATASET_NPY, COLOR, dataset_inst):
 
 def makeDataset(meta):
 
-    print("Number of positions to generate:")
+    global OFFSETS_WHITE
+    global OFFSETS_BLACK
+
+    if meta['dataset_generated'] == "True":
+        print("Dataset already generated.")
+        print("     WHITE:", meta['dataset_white_path'])
+        print("         SHAPE:", meta['num_white_positions_train'])
+        print("     BLACK:", meta['dataset_black_path'])
+        print("         SHAPE:", meta['num_black_positions_train'])
+        print("---\n")
+        return
+
+    print("Target number of positions to generate:")
     print("     WHITE:", NUM_WHITE_POSITIONS)
     print("     BLACK:", NUM_BLACK_POSITIONS, "\n")
-
-    DATASET_WHITE_NPY = os.path.join(DATASET_DIR, "DATASET_WHITE.npy")
-    DATASET_BLACK_NPY = os.path.join(DATASET_DIR, "DATASET_BLACK.npy")
 
     dataset_files = glob.glob(os.path.join(
         DATASET_DIR, '*'+ACCEPTED_DECOMPRESSED_EXTENSION[0]))
     dataset_file = dataset_files[0]
 
-    dataset_inst_white = open(dataset_file, mode='r', encoding="utf-8")
-    dataset_inst_black = open(dataset_file, mode='r', encoding="utf-8")
-
-    white_p = Process(target=makeDatasetByColor, args=(
-        DATASET_WHITE_NPY, 1, dataset_inst_white, ))
-    black_p = Process(target=makeDatasetByColor, args=(
-        DATASET_BLACK_NPY, 0, dataset_inst_black, ))
-
     print("Generating datasets...\n")
+
+    TOTAL_NUM_PROCESS_PER_COLOR = 4
+    DATA_TO_GEN_P_PROCESS_WHITE = int(NUM_WHITE_POSITIONS / TOTAL_NUM_PROCESS_PER_COLOR)
+    DATA_TO_GEN_P_PROCESS_BLACK = int(NUM_BLACK_POSITIONS / TOTAL_NUM_PROCESS_PER_COLOR)
+    GAMES_TO_SPLIT_W = int(OFFSETS_WHITE.shape[0] / TOTAL_NUM_PROCESS_PER_COLOR)
+    GAMES_TO_SPLIT_B = int(OFFSETS_BLACK.shape[0] / TOTAL_NUM_PROCESS_PER_COLOR)
 
     start_time = time.time()
 
-    white_p.start()
-    black_p.start()
+    white_processes = []
+    black_processes = []
 
-    white_p.join()
-    black_p.join()
+    datasets_suffix_w = "-DATASET-WHITE.npy"
+    datasets_suffix_b = "-DATASET-BLACK.npy"
+
+    for pid in range(TOTAL_NUM_PROCESS_PER_COLOR):
+        w_start = pid * GAMES_TO_SPLIT_W
+        w_end = (pid + 1) * GAMES_TO_SPLIT_W
+        b_start = pid * GAMES_TO_SPLIT_B
+        b_end = (pid + 1) * GAMES_TO_SPLIT_B
+
+        dataset_inst_white = open(dataset_file, mode='r', encoding="utf-8")
+        dataset_inst_black = open(dataset_file, mode='r', encoding="utf-8")
+
+        white_processes.append(
+            Process(target=makeDatasetByColor, args=(
+                pid, dataset_inst_white, 1, DATA_TO_GEN_P_PROCESS_WHITE, w_start, w_end, str(pid+1)+datasets_suffix_w, ))
+        )
+        black_processes.append(
+            Process(target=makeDatasetByColor, args=(
+                pid, dataset_inst_black, 0, DATA_TO_GEN_P_PROCESS_BLACK, b_start, b_end, str(pid+1)+datasets_suffix_b, ))
+        )
+
+    for proc in white_processes:
+        proc.start()
+
+    for proc in black_processes:
+        proc.start()
+
+    for proc in black_processes:
+        proc.join()
+
+    for proc in white_processes:
+        proc.join()
 
     time_to_gen = time.time() - start_time
 
-    meta['dataset_white_path'] = DATASET_WHITE_NPY
-    meta['dataset_black_path'] = DATASET_BLACK_NPY
+    # CHECK FOR ALL 8 FILES and MERGE THEM TOGETHER
+    dataset_gen_files_w = glob.glob(os.path.join(
+        DATASET_DIR, '*'+datasets_suffix_w))
+    dataset_gen_files_b = glob.glob(os.path.join(
+        DATASET_DIR, '*'+datasets_suffix_b))
+
+    print('\n---')
+    print('Combining the datasets...')
+
+    temp_data_w = np.empty((0, 773), dtype=np.bool)
+    temp_data_b = np.empty((0, 773), dtype=np.bool)
+
+    for file in dataset_gen_files_w:
+        with open(file, 'rb') as f:
+            np_arr = np.load(f)
+        
+        temp_data_w = np.vstack((temp_data_w, np_arr))
+
+    W_DATASET_NPY = os.path.join(DATASET_DIR, "WHITE-DATASET.npy")
+    with open(W_DATASET_NPY, 'wb') as f:
+        np.save(f, temp_data_w, allow_pickle=False, fix_imports=False)
+
+    for file in dataset_gen_files_b:
+        with open(file, 'rb') as f:
+            np_arr = np.load(f)
+
+        temp_data_b = np.vstack((temp_data_b, np_arr))
+
+    B_DATASET_NPY = os.path.join(DATASET_DIR, "BLACK-DATASET.npy")
+    with open(B_DATASET_NPY, 'wb') as f:
+        np.save(f, temp_data_b, allow_pickle=False, fix_imports=False)
+
+    delete_f_glob_name = "*-DATASET-*.npy"
+    dataset_files = glob.glob(os.path.join(
+        DATASET_DIR, delete_f_glob_name))
+
+    for file in dataset_files:
+        os.remove(file)
+
+    print('Combined.')
+    print("---")
+
+    meta['dataset_white_path'] = W_DATASET_NPY
+    meta['dataset_black_path'] = B_DATASET_NPY
+    meta['num_white_positions_train'] = temp_data_w.shape[0]
+    meta['num_black_positions_train'] = temp_data_b.shape[0]
     meta['dataset_generated'] = "True"
     meta['time_to_generate_dataset'] = round(time_to_gen, 3)
 
     with open(META_FILE, 'w') as f:
         json.dump(meta, f, indent=4)
 
-    with open(DATASET_WHITE_NPY, 'rb') as f:
-        white_data_f = np.load(f)
-
-    with open(DATASET_BLACK_NPY, 'rb') as f:
-        black_data_f = np.load(f)
-
     print("\nDatasets generated.")
-    print("     WHITE:", DATASET_WHITE_NPY)
-    print("         SHAPE:", white_data_f.shape)
-    print("     BLACK:", DATASET_BLACK_NPY)
-    print("         SHAPE:", black_data_f.shape)
+    print("     WHITE:", W_DATASET_NPY)
+    print("         SHAPES:", temp_data_w.shape[0])
+    print("     BLACK:", B_DATASET_NPY)
+    print("         SHAPES:", temp_data_b.shape[0])
     print("     Time to generate:", meta['time_to_generate_dataset'], "seconds")
     print("---\n")
 
+
+def makeDatasetOffsets(dataset_inst, COLOR, offset_file_path):
+
+    offsets = []
+    while True:
+        offset = dataset_inst.tell()
+        current_game_headers = chess.pgn.read_headers(dataset_inst)
+        if current_game_headers is None:
+            break
+        
+        ply_cnt = int(current_game_headers['PlyCount'])
+
+        if ply_cnt < 20:
+            continue
+
+        # 1 if white wins, 0 if black wins, 2 if its a draw
+        result = 1 if "1-0" in current_game_headers['Result'] else 0 if "0-1" in current_game_headers['Result'] else 2
+
+        if result == COLOR:
+            offsets.append(offset)
+
+    np_offsets = np.asarray(offsets)
+
+    with open(offset_file_path, 'wb') as f:
+        np.save(f, np_offsets, allow_pickle=False, fix_imports=False)
+
+    dataset_inst.seek(0)
+
+
+def calculateDatasetOffsets(meta):
+
+    global OFFSETS_WHITE
+    global OFFSETS_BLACK
+
+    if meta['dataset_offsets_calculated'] == "True":
+        with open(meta['dataset_white_offset_path'], 'rb') as f:
+            OFFSETS_WHITE = np.load(f)
+
+        with open(meta['dataset_black_offset_path'], 'rb') as f:
+            OFFSETS_BLACK = np.load(f)
+            
+        print("Dataset offsets calculated.")
+        print("     WHITE:", meta['dataset_white_offset_path'])
+        print("         WON:", OFFSETS_WHITE.shape[0], "games")
+        print("     BLACK:", meta['dataset_black_offset_path'])
+        print("         WON:", OFFSETS_BLACK.shape[0], "games")
+        print("---\n")
+        return
+
+    dataset_files = glob.glob(os.path.join(
+        DATASET_DIR, '*'+ACCEPTED_DECOMPRESSED_EXTENSION[0]))
+    dataset_file = dataset_files[0]
+
+    DATASET_OW_PATH = os.path.join(DATASET_DIR, "OFFSETS-White.npy")
+    DATASET_OB_PATH = os.path.join(DATASET_DIR, "OFFSETS-Black.npy")
+
+    dataset_inst_white = open(dataset_file, mode='r', encoding="utf-8")
+    dataset_inst_black = open(dataset_file, mode='r', encoding="utf-8")
+
+    print("Calculating dataset offsets for white and black...\n")
+
+    white_offsets_p = Process(
+        target=makeDatasetOffsets, args=(dataset_inst_white, 1, DATASET_OW_PATH,))
+    black_offsets_p = Process(
+        target=makeDatasetOffsets, args=(dataset_inst_black, 0, DATASET_OB_PATH,))
+
+    start_time = time.time()
+
+    white_offsets_p.start()
+    black_offsets_p.start()
+
+    white_offsets_p.join()
+    black_offsets_p.join()
+
+    time_to_calc_offsets = time.time() - start_time
+
+    with open(DATASET_OW_PATH, 'rb') as f:
+        OFFSETS_WHITE = np.load(f)
+
+    with open(DATASET_OB_PATH, 'rb') as f:
+        OFFSETS_BLACK = np.load(f)
+
+    meta['dataset_white_offset_path'] = DATASET_OW_PATH
+    meta['dataset_black_offset_path'] = DATASET_OB_PATH
+    meta['dataset_offsets_calculated'] = "True"
+    meta['time_to_calc_dataset_offset'] = round(time_to_calc_offsets, 3)
+
+    with open(META_FILE, 'w') as f:
+        json.dump(meta, f, indent=4)
+
+
+    print("\nDatasets offsets calculated.")
+    print("     WHITE:", DATASET_OW_PATH)
+    print("         WON:", OFFSETS_WHITE.shape[0], "games")
+    print("     BLACK:", DATASET_OB_PATH)
+    print("         WON:", OFFSETS_BLACK.shape[0], "games")
+    print("     Time to calculate:",
+          meta['time_to_calc_dataset_offset'], "seconds")
+    print("---\n")
 
 def main(args):
 
@@ -299,8 +464,8 @@ def main(args):
         for file in files:
             os.remove(file)
 
-        meta['dataset_white_path'] = ''
-        meta['dataset_black_path'] = ''
+        meta['dataset_white_path'] = []
+        meta['dataset_black_path'] = []
         meta['dataset_generated'] = False
         meta['time_to_generate_dataset'] = -1
 
@@ -312,19 +477,15 @@ def main(args):
     with open(META_FILE, 'r') as f:
         meta = json.load(f)
 
-    if meta['dataset_generated'] == "True":
-        print("Dataset already generated.")
-        print("---\n")
-        return 1
-
     global NUM_WHITE_POSITIONS
     global NUM_BLACK_POSITIONS
 
-    NUM_WHITE_POSITIONS = meta['num_white_positions_train']
-    NUM_BLACK_POSITIONS = meta['num_black_positions_train']
+    NUM_WHITE_POSITIONS = meta['max_num_white_positions_train']
+    NUM_BLACK_POSITIONS = meta['max_num_black_positions_train']
 
     downloadDataset(meta)
     decompressDataset(meta)
+    calculateDatasetOffsets(meta)
     makeDataset(meta)
 
     print("Complete.")
