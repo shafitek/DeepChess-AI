@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+from datetime import datetime
 import requests
 import json
 import glob
@@ -135,9 +136,9 @@ def getBitBoard(board):
         black_pawns + black_rooks + black_knight + \
         black_bishop + black_queen + black_king + additional_5
 
-    bitboard = np.asarray(vector)
-
-    return bitboard
+    return vector
+    # bitboard = np.asarray(vector)
+    # return bitboard
 
 def makeDatasetByColor(pid, dataset_inst, color, max_to_gen, s_idx, end_idx, dataset_name):
 
@@ -145,19 +146,29 @@ def makeDatasetByColor(pid, dataset_inst, color, max_to_gen, s_idx, end_idx, dat
     global OFFSETS_BLACK
 
     OFFSET = OFFSETS_WHITE if color == 1 else OFFSETS_BLACK
-
+    STR_COLOR = "WHITE" if color == 1 else "BLACK"
     DATASET_NPY = os.path.join(DATASET_DIR, dataset_name)
     games_played = 0
     positions_computed = 0
     
-    temp_data = np.empty((0, 773), dtype=np.bool)
+    temp_data_array = []
+    temp_data = []
 
+    """ 
+    Python lists are actually arrays. So I made sure that I don't append too 
+    many items into the array. Hence why I have an array `temp_data_array` to 
+    store the pointer of the `temp_data` before its flushed every 5000 games.
+    As it is recommended, I add the Python arrays in loop. After the loop,
+    I convert them in NumPy arrays to improve performance.
+    """
     while(positions_computed < max_to_gen and (s_idx+games_played) < end_idx):
         if games_played % 5000 == 0:
-            with open(DATASET_NPY, 'wb') as f:
-                np.save(f, temp_data, allow_pickle=False, fix_imports=False)
-            print(dataset_name, "{}: [{} / {}]".format("WHITE" if color == 1 else "BLACK",
-                                         positions_computed, max_to_gen))
+            now = datetime.now()
+            current_time = now.strftime("%H:%M:%S")
+            temp_data_array.append(temp_data)
+            temp_data = []
+            print("{}-{}-{}: [{} / {}]".format(pid, STR_COLOR, current_time,
+                                               positions_computed, max_to_gen))
 
         dataset_inst.seek(OFFSET[s_idx+games_played])
         current_game = chess.pgn.read_game(dataset_inst)
@@ -178,21 +189,31 @@ def makeDatasetByColor(pid, dataset_inst, color, max_to_gen, s_idx, end_idx, dat
                 continue
 
             bitboard = getBitBoard(board)
-            temp_data = np.vstack((temp_data, bitboard))
+            # temp_data = np.vstack((temp_data, bitboard))
+            temp_data.append(bitboard)
             positions_computed += 1
 
             board.push(move)
             rec += 1
             idx += 1
         
-        games_played += 1
-        
-    print(dataset_name, "{}: [{} / {}]".format("WHITE" if color == 1 else "BLACK",
-                                 positions_computed, max_to_gen))
+        games_played += 1    
 
-    if (temp_data.shape[0] > 0):
-        with open(DATASET_NPY, 'wb') as f:
-            np.save(f, temp_data, allow_pickle=False, fix_imports=False)
+    if (len(temp_data) > 0):
+        temp_data_array.append(temp_data)
+
+        now = datetime.now()
+        current_time = now.strftime("%H:%M:%S")
+        print("{}-{}-{}: [{} / {}]".format(pid, STR_COLOR, current_time,
+                                                            positions_computed, max_to_gen))
+
+    dataset = np.empty((0, 773), dtype=np.bool)
+    for stack in temp_data_array[1:]:
+        stack = np.asarray(stack, dtype=np.bool)
+        dataset = np.vstack((dataset, stack))
+
+    with open(DATASET_NPY, 'wb') as f:
+        np.save(f, dataset, allow_pickle=False, fix_imports=False)
 
 
 def makeDataset(meta):
@@ -464,8 +485,8 @@ def main(args):
         for file in files:
             os.remove(file)
 
-        meta['dataset_white_path'] = []
-        meta['dataset_black_path'] = []
+        meta['dataset_white_path'] = ""
+        meta['dataset_black_path'] = ""
         meta['dataset_generated'] = False
         meta['time_to_generate_dataset'] = -1
 
