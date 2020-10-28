@@ -1,6 +1,9 @@
 __pycache__
-.vscode/
+.ipynb_checkpoints
+.vscode
 dataset/*
 !dataset/.gitkeep
-models/checkpoints
+models/checkpoints/*
+!models/checkpoints/.gitkeep
 meta.json
+playground.py
