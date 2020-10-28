@@ -33,8 +33,7 @@ def getBitBoard(board):
         black_pawns + black_rooks + black_knight + \
         black_bishop + black_queen + black_king + additional_5
 
-    bitboard = np.asarray(vector)
-    return bitboard
+    return np.asarray(vector, dtype=np.bool)
 
 def AlphaBeta(alpha, beta):
     pass

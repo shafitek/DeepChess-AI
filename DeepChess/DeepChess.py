@@ -2,12 +2,13 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import sys
 import json
+import argparse
 import random
 import math
 from datetime import datetime
 import numpy as np
 from tensorflow.keras.models import Model, Sequential, load_model
-from tensorflow.keras.layers import Input, Dense, Concatenate
+from tensorflow.keras.layers import Input, Dense, Concatenate, LeakyReLU
 from tensorflow.keras import losses
 from tensorflow.keras.utils import Sequence
 from tensorflow.keras.optimizers import Adam, schedules
@@ -17,7 +18,7 @@ import tensorflow.keras.backend as K
 sys.path.append("..")
 from meta import *
 
-EPOCHS = 500
+EPOCHS = 100
 BATCH_SIZE = 64
 INPUT_DIM = 773
 
@@ -85,10 +86,11 @@ class LearningRateDecay(Callback):
         self.decay_rate = decay_rate
 
     def on_epoch_begin(self, epoch, logs=None):
-        decayed_learning_rate = self.init_learning_rate * math.pow(self.decay_rate, epoch)
+        global EPOCHS_ALREADY_TRAINED
+        decayed_learning_rate = self.init_learning_rate * math.pow(self.decay_rate, epoch+EPOCHS_ALREADY_TRAINED)
         K.set_value(self.model.optimizer.lr, decayed_learning_rate)
         new_lr = float(K.get_value(self.model.optimizer.lr))
-        print("Learning Rate at {}: {:.5f}".format(epoch+1, new_lr))
+        print("Learning Rate at {}: {:.5f}".format(EPOCHS_ALREADY_TRAINED+epoch+1, new_lr))
 
 
 def trainDeepChess(dbn, trainWX, trainBX, testWX, testBX):
@@ -101,10 +103,10 @@ def trainDeepChess(dbn, trainWX, trainBX, testWX, testBX):
     r_p2v = dbn(right_input)
 
     head = Concatenate()([l_p2v, r_p2v])
-    h1 = Dense(400, activation='relu')(head)
-    h2 = Dense(200, activation='relu')(h1)
-    h3 = Dense(100, activation='relu')(h2)
-    prediction = Dense(2, activation='sigmoid')(h3)
+    h1 = Dense(400, activation=LeakyReLU(alpha=0.3))(head)
+    h2 = Dense(200, activation=LeakyReLU(alpha=0.3))(h1)
+    h3 = Dense(100, activation=LeakyReLU(alpha=0.3))(h2)
+    prediction = Dense(2, activation='softmax')(h3)
 
     # Siamese Network
     model = Model(inputs=[left_input, right_input], outputs=prediction)
@@ -112,7 +114,6 @@ def trainDeepChess(dbn, trainWX, trainBX, testWX, testBX):
     model.compile(loss=losses.CategoricalCrossentropy(),
                   optimizer=Adam(learning_rate=INIT_LEARNING_RATE),
                   metrics=['accuracy'])
-    model.summary()
 
     training_generator = DataGenerator(trainWX, trainBX, TRAIN_SIZE)
     validation_generator = DataGenerator(testWX, testBX, VAL_SIZE, batch_size=32)
@@ -121,6 +122,14 @@ def trainDeepChess(dbn, trainWX, trainBX, testWX, testBX):
         MODELS_CHECKPOINT_DIR, "weights-improvement-{epoch:02d}-{val_accuracy:.2f}.hdf5")
     checkpoint = ModelCheckpoint(filepath, save_best_only=True, monitor='val_accuracy',
                                  mode='max',)
+
+    global CONTINUE_TRAINING
+    if CONTINUE_TRAINING:
+        with open(META_FILE, 'rb') as f:
+            meta = json.load(f)
+        model.load_weights(meta['deepchess_model_path'])
+        
+    model.summary()
 
     model.fit(
         epochs=EPOCHS,
@@ -141,6 +150,7 @@ def trainDeepChess(dbn, trainWX, trainBX, testWX, testBX):
 
     meta['deepchess_trained'] = "True"
     meta['deepchess_model_path'] = DEEPCHESS_MODEL_PATH
+    meta['deepchess_epochs_trained'] += EPOCHS
 
     with open(META_FILE, 'w') as f:
         json.dump(meta, f, indent=4)
@@ -149,22 +159,14 @@ def trainDeepChess(dbn, trainWX, trainBX, testWX, testBX):
     print("     Path:", DEEPCHESS_MODEL_PATH)
     print("---\n")
 
-    now = datetime.now()
-    current_time = now.strftime("%H:%M:%S")
-    print('\n---')
-    print("Training ended at {}.".format(current_time))
-    print('---\n')
-
-    print("ALL DONE!")
-
 
 def Pos2Vec(weights_path):
     
     model = Sequential()
-    model.add(Dense(600, input_dim=INPUT_DIM, activation='relu'))
-    model.add(Dense(400, activation='relu'))
-    model.add(Dense(200, activation='relu'))
-    model.add(Dense(100, activation='relu'))
+    model.add(Dense(600, input_dim=INPUT_DIM, activation=LeakyReLU(alpha=0.3)))
+    model.add(Dense(400, activation=LeakyReLU(alpha=0.3)))
+    model.add(Dense(200, activation=LeakyReLU(alpha=0.3)))
+    model.add(Dense(100, activation=LeakyReLU(alpha=0.3)))
     
     model.load_weights(weights_path)
 
@@ -197,7 +199,8 @@ def main():
     with open(META_FILE) as f:
         meta = json.load(f)
 
-    if meta['deepchess_trained'] == "True" and os.path.exists(meta['deepchess_model_path']):
+    global CONTINUE_TRAINING
+    if meta['deepchess_trained'] == "True" and not CONTINUE_TRAINING:
         model = load_model(meta['deepchess_model_path'])
         model.summary()
         print('---\n')
@@ -205,6 +208,13 @@ def main():
         print("     Path:", meta['deepchess_model_path'])
         print("---")
         return 1
+
+    if CONTINUE_TRAINING:
+        global EPOCHS_ALREADY_TRAINED
+        EPOCHS_ALREADY_TRAINED = meta['deepchess_epochs_trained']
+        print('---')
+        print('Epochs trained already:', EPOCHS_ALREADY_TRAINED)
+        print("---")
 
     with open(meta['dataset_white_path'], 'rb') as f:
         WHITE_DATASET_F = np.load(f)
@@ -239,15 +249,31 @@ def main():
     dbn = Pos2Vec(meta['pos2vec_weights_path'])
 
     now = datetime.now()
-    current_time = now.strftime("%H:%M:%S")
+    start_time = now.strftime("%H:%M:%S")
     
     print('\n---')
-    print("Training started at {}.".format(current_time))
+    print("Training started at {}.".format(start_time))
     print('---\n')
 
     trainDeepChess(dbn, W_DS_TRAIN, B_DS_TRAIN, W_DS_VAL, B_DS_VAL)
 
+    now = datetime.now()
+    end_time = now.strftime("%H:%M:%S")
+    print('\n---')
+    print("Training started at {}.".format(start_time))
+    print("Training ended at {}.".format(end_time))
+    print('---\n')
+
+    print("ALL DONE!")
+
 
 if __name__ == "__main__":
     
+    parser = argparse.ArgumentParser(description='Process some integers.')
+    parser.add_argument('--continue', action="store_true", dest='continue_train',
+                        help='Resumes training the model if a model already exists.')
+
+    args = parser.parse_args()
+    global CONTINUE_TRAINING
+    CONTINUE_TRAINING = args.continue_train
     main()

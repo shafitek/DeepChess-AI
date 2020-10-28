@@ -33,6 +33,7 @@ def main():
             "pos2vec_weights_path": "",
             "deepchess_trained": "False",
             "deepchess_model_path": "",
+            "deepchess_epochs_trained": 0,
             "max_num_white_positions_train": 2100000,
             "max_num_black_positions_train": 1600000,
             "num_white_positions_train": 0,

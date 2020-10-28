@@ -2,10 +2,11 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import sys
 import json
+import argparse
 import math
 import numpy as np
 from tensorflow.keras.models import Model, Sequential
-from tensorflow.keras.layers import Input, Dense
+from tensorflow.keras.layers import Input, Dense, LeakyReLU
 from tensorflow.keras.losses import MeanSquaredError
 from tensorflow.keras.optimizers import SGD, Adam, schedules
 from tensorflow.keras.callbacks import Callback, LearningRateScheduler
@@ -14,7 +15,7 @@ from tensorflow.keras import backend as K
 sys.path.append("..")
 from meta import *
 
-EPOCHS = 50
+EPOCHS = 10
 BATCH_SIZE = 64
 DATASET_WHITE_SIZE = 1000000
 DATASET_BLACK_SIZE = 1000000
@@ -31,8 +32,8 @@ DECAY_FACTOR = 0.98
 
 POS2VEC_WEIGHTS_PATH = os.path.join(MODELS_DIR, "DBN.h5")
 
-FORWARD_PASS_SPLIT = 16000
-FORWARD_PASS_IT = int(DATASET_SIZE / FORWARD_PASS_SPLIT)
+FORWARD_PASS_SPLIT = 50000
+FORWARD_PASS_IT = DATASET_SIZE // FORWARD_PASS_SPLIT
 
 DBN_WEIGHTS = []
 
@@ -75,8 +76,8 @@ def trainDBN(trainX):
     """ Unsupervised layerwise training """
     for i in range(1, DBN_NUM_LAYERS):
         model = Sequential()
-        model.add(Dense(DBN_LAYERS_DIM[i], input_dim=DBN_LAYERS_DIM[i-1], activation='relu'))
-        model.add(Dense(DBN_LAYERS_DIM[i-1], activation='sigmoid'))
+        model.add(Dense(DBN_LAYERS_DIM[i], input_dim=DBN_LAYERS_DIM[i-1], activation=LeakyReLU(alpha=0.3)))
+        model.add(Dense(DBN_LAYERS_DIM[i-1], activation='tanh'))
         
         model.compile(loss=MeanSquaredError(),
                       optimizer=Adam(learning_rate=INIT_LEARNING_RATE),
@@ -85,7 +86,8 @@ def trainDBN(trainX):
 
         model.fit(trainX, trainX,
                   epochs=EPOCHS, batch_size=BATCH_SIZE,
-                  callbacks=[LearningRateDecay(INIT_LEARNING_RATE, DECAY_FACTOR)])
+                  callbacks=[LearningRateDecay(INIT_LEARNING_RATE, DECAY_FACTOR)],
+                  shuffle=True)
 
         DBN_WEIGHTS.append(model.layers[0].get_weights())
 
@@ -93,9 +95,9 @@ def trainDBN(trainX):
             trainX = getNewTrainX(model, trainX, DBN_LAYERS_DIM[i])
 
     model = Sequential()
-    model.add(Dense(DBN_LAYERS_DIM[1], input_dim=DBN_LAYERS_DIM[0], activation='relu'))
+    model.add(Dense(DBN_LAYERS_DIM[1], input_dim=DBN_LAYERS_DIM[0], activation=LeakyReLU(alpha=0.3)))
     for i in range(2, DBN_NUM_LAYERS):
-        model.add(Dense(DBN_LAYERS_DIM[i], activation='relu'))
+        model.add(Dense(DBN_LAYERS_DIM[i], activation=LeakyReLU(alpha=0.3)))
 
     for i, layer in enumerate(model.layers):
         layer.set_weights(DBN_WEIGHTS[i])
@@ -123,7 +125,7 @@ def trainDBN(trainX):
     print("---")
 
 
-def main():
+def main(args):
     
     print("-------------------------")
     print("| DeepChess: 1. Pos2Vec |")
@@ -141,7 +143,7 @@ def main():
     with open(META_FILE) as f:
         meta = json.load(f)
 
-    if meta['pos2vec_trained'] == "True" and os.path.exists(meta['pos2vec_weights_path']):
+    if meta['pos2vec_trained'] == "True" and not args.retrain:
         print("Pos2Vec already trained.")
         print("     Path:", meta['pos2vec_weights_path'])
         print("---")
@@ -170,4 +172,10 @@ def main():
 
 if __name__ == "__main__":
 
-    main()
+    parser = argparse.ArgumentParser(description='Process some integers.')
+    parser.add_argument('--retrain', action="store_true", dest='retrain',
+                        help='Retrains the model from scratch.')
+
+    args = parser.parse_args()
+
+    main(args)

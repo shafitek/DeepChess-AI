@@ -15,11 +15,11 @@ The score function is based on the following academic paper:
 
 ## SOURCES
 
-https://www.tensorflow.org/guide/keras/
-https://keras.io/api/
-https://blog.chesshouse.com/how-to-read-and-write-algebraic-chess-notation/
-https://python-chess.readthedocs.io/en/latest/core.html
-https://python-chess.readthedocs.io/en/latest/pgn.html
-https://machinelearningmastery.com/greedy-layer-wise-pretraining-tutorial/
-https://www.pyimagesearch.com/2019/07/22/keras-learning-rate-schedules-and-decay/
+https://www.tensorflow.org/guide/keras/ \
+https://keras.io/api/ \
+https://blog.chesshouse.com/how-to-read-and-write-algebraic-chess-notation/ \
+https://python-chess.readthedocs.io/en/latest/core.html \
+https://python-chess.readthedocs.io/en/latest/pgn.html \
+https://machinelearningmastery.com/greedy-layer-wise-pretraining-tutorial/ \
+https://www.pyimagesearch.com/2019/07/22/keras-learning-rate-schedules-and-decay/ \
 https://stanford.edu/~shervine/blog/keras-how-to-generate-data-on-the-fly
