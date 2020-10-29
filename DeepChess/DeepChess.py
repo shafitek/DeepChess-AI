@@ -18,7 +18,7 @@ import tensorflow.keras.backend as K
 sys.path.append("..")
 from meta import *
 
-EPOCHS = 100
+EPOCHS = 300
 BATCH_SIZE = 64
 INPUT_DIM = 773
 

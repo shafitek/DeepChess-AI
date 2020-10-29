@@ -12,6 +12,7 @@ The score function is based on the following academic paper:
 
 ## IMPLEMENTATION
 
+Acheived validation accuracy of ~90%. Still working on the minimax (with alpha-beta) algorithm...Will be updated.
 
 ## SOURCES
 

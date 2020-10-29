@@ -39,8 +39,7 @@ def main():
             "num_white_positions_train": 0,
             "num_black_positions_train": 0,
             "num_white_positions_test": 100000,
-            "num_black_positions_test": 100000,
-            "default_engine_path": "engine/stockfish_x64"
+            "num_black_positions_test": 100000
         }
     
     with open(META_FILE, 'w') as f:
