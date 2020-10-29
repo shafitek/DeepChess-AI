@@ -1,3 +1,9 @@
+Engine 0: DeepChess
+-------------------
+File Name: deepchess.py
+Notes: DeepChess engine that uses the modified minimax alphabeta algorithm 
+       and uses DeepChess network as its evaluation function.
+
 Engine 1: Stockfish
 -------------------
 File Name: stockfish_x64
